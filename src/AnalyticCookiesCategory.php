@@ -51,27 +51,50 @@ class AnalyticCookiesCategory extends CookiesCategory
                 return $this;
     }
 
-    public function googleTagManager(string $id, $config): static
+    public function googleTagManager(string $id, array $config): static
     {
         GoogleTagManagerConfig::enable($config);
-
+    
+        // e.g. ['ad_storage' => 'granted', 'analytics_storage' => 'granted']
         $consentSettings = array_fill_keys($config, 'granted');
-
         $consentJson = json_encode($consentSettings, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-
+    
         $this->group(function (CookiesGroup $group) use ($consentJson, $id) {
             $this->getGroupCookies(group: $group, name: static::GOOGLE_TAG_MANAGER, id: $id)
-                ->accepted(fn(Consent $consent) => $consent
-                    ->script('<script async src="https://www.googletagmanager.com/gtag/js?id=' . $id . '"></script>')
-                    ->script(
-                    '<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({\'gtm.start\':new Date().getTime(),event:\'gtm.js\'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!=\'dataLayer\'?\'&l=\'+l:\'\';j.async=true;j.src=\'https://www.googletagmanager.com/gtm.js?id=\'+i+dl;f.parentNode.insertBefore(j,f);})(window,document,\'script\',\'dataLayer\',\''. $id .'\');</script>'
-                    )
-                    ->script(
-                        '<script>function loadGoogleTagManagerScript() {window.dataLayer = window.dataLayer || [];function gtag(){dataLayer.push(arguments);} gtag(\'consent\', \'update\', ' . $consentJson . ');} loadGoogleTagManagerScript()</script>'
-                    )
-                );
+                ->accepted(function (Consent $consent) use ($consentJson, $id) {
+    
+                    // CASE 1: ID is a GTM container (GTM-XXXXXX)
+                    if (str_starts_with($id, 'GTM-')) {
+                        return $consent
+                            ->script(
+                                // GTM snippet only
+                                "<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','{$id}');</script>"
+                            )
+                            ->script(
+                                // Consent update via gtag on the same dataLayer
+                                "<script>window.dataLayer = window.dataLayer || [];function gtag(){dataLayer.push(arguments);}gtag('consent','update',{$consentJson});</script>"
+                            );
+                    }
+    
+                    // CASE 2: ID is a Google Ads / GA4 ID (AW-..., G-...)
+                    // -> Use pure gtag.js, DO NOT load gtm.js
+                    return $consent
+                        ->script(
+                            "<script async src=\"https://www.googletagmanager.com/gtag/js?id={$id}\"></script>"
+                        )
+                        ->script(
+                            "<script>
+                                window.dataLayer = window.dataLayer || [];
+                                function gtag(){dataLayer.push(arguments);}
+                                gtag('js', new Date());
+                                gtag('config', '{$id}');
+                                gtag('consent','update',{$consentJson});
+                            </script>"
+                        );
+                });
         });
-        
+    
         return $this;
     }
+
 }
